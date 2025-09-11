@@ -16,6 +16,8 @@ from visualization_msgs.msg import MarkerArray # Added for debugging markers
 import requests
 from gazebo_msgs.srv import SpawnModel
 import time
+from gazebo_msgs.srv import SetLinkProperties, GetLinkProperties
+import numpy as np
 
 # Global variable to store the latest camera image
 latest_image = None
@@ -24,7 +26,7 @@ image_timestamp = 0
 
 bridge = CvBridge()
 SERVER_URL = "http://localhost:8000/predict"  # URL du serveur FastAPI
-INSTRUCTION = "Pick the box"
+INSTRUCTION = "pick the red cube" 
 
 # --- Configuration for Simulation vs. Real Robot ---
 # This variable will now be set based on command-line arguments
@@ -93,6 +95,36 @@ def encode_image(img):
     buffered = BytesIO()
     pil_img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+def control_gripper(move_group_gripper, gripper_command):
+    """
+    Controle le gripper en fonction d'une commande de -1 (ouvrir) ou +1 (fermer).
+    
+    Args:
+        move_group_gripper: L'objet MoveGroupCommander pour le groupe "panda_hand".
+        gripper_command: Une valeur > 0 pour fermer, <= 0 pour ouvrir.
+    """
+    # Ce sont les positions des articulations pour le gripper du Panda
+    # 0.04 pour chaque doigt = compltement ouvert
+    # Une petite valeur comme 0.01 = ferm (pour ne pas forcer)
+    OPEN_STATE = [0.04, 0.04]
+    CLOSED_STATE = [0.01, 0.01]
+    
+    if gripper_command > 0:
+        rospy.loginfo("Commande: Fermeture du gripper...")
+        target_joints = CLOSED_STATE
+    else:
+        rospy.loginfo("Commande: Ouverture du gripper...")
+        target_joints = OPEN_STATE
+        
+    try:
+        move_group_gripper.set_joint_value_target(target_joints)
+        success = move_group_gripper.go(wait=True)
+        move_group_gripper.stop()
+        if not success:
+            rospy.logwarn("Echec du mouvement du gripper.")
+    except Exception as e:
+        rospy.logerr("Erreur lors du controle du gripper: %s" % e)
 
 
 def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an argument
@@ -238,15 +270,18 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
    # 1. Dfinir la pose du cube
     box_pose = geometry_msgs.msg.Pose()
     box_pose.orientation.w = 1.0
-    box_pose.position.x = 0.5  # Devant le robot
+    box_pose.position.x = 0.3  # Devant le robot
     box_pose.position.y = 0.0  # Centr
-    box_pose.position.z = 0.1  # Lgrement au-dessus du sol (ou de la table)
+    box_pose.position.z = 0.025  # Lgrement au-dessus du sol (ou de la table)
 
     # 2. Charger le fichier SDF du cube
     # Remplacez "votre_package" par le nom de votre package ROS
     sdf_path = "/home/ubuntu_hi_paris/ws_moveit/src/panda_moveit_config/models/grasping_cube/model.sdf"
     with open(sdf_path, "r") as f:
         cube_sdf = f.read()
+    
+    cube_sdf = cube_sdf.replace('<gravity>false</gravity>', '<gravity>true</gravity>')
+    # cube_sdf = cube_sdf.replace('<static>false</static>', '<static>true</static>')
 
     # 3. Faire apparatre le cube dans Gazebo
     try:
@@ -257,14 +292,36 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             initial_pose=box_pose,
             reference_frame="world"  # ou "panda_link0" si vous prfrez
         )
+ 
+        # Nom du lien : habituellement 'model_name::link_name'
+        link_name = 'grasping_cube::link'
+
+        # Service pour rcuprer les propri actuelles
+        get_link = rospy.ServiceProxy('/gazebo/get_link_properties', GetLinkProperties)
+        props = get_link(link_name)
+
+        # Modifier la gravit
+        set_link = rospy.ServiceProxy('/gazebo/set_link_properties', SetLinkProperties)
+        set_link(
+            link_name=link_name,
+            com=props.com,
+            gravity_mode=False,      
+            mass=props.mass,
+            ixx=props.ixx,
+            iyy=props.iyy,
+            izz=props.izz,
+            ixy=props.ixy,
+            ixz=props.ixz,
+            iyz=props.iyz
+        )
         print("Successfully spawned %s box_name in Gazebo." % box_name)
     except rospy.ServiceException as e:
         rospy.logerr("Spawn SDF service call failed: %s " % e)
         return
 
     rospy.sleep(1.0) # Laisser le temps  Gazebo de se mettre  jour
-
-    # 4. Ajouter le mme cube  la scne de planification MoveIt
+        
+        # 4. Ajouter le mme cube  la scne de planification MoveIt
     print("============ Adding box to MoveIt planning scene...")
     box_pose_stamped = geometry_msgs.msg.PoseStamped()
     box_pose_stamped.header.frame_id = planning_frame
@@ -273,13 +330,59 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
     # La taille doit correspondre  celle dfinie dans le fichier SDF
     box_size = (0.05, 0.05, 0.05) 
     scene.add_box(box_name, box_pose_stamped, size=box_size)
+
     # scene.allow_collisions('grasping_cube',)
-    scene.remove_world_object(box_name)
+    # scene.remove_world_object(box_name)
     rospy.sleep(1.0) # Laisser le temps  MoveIt de se mettre  jour
     known_objects = scene.get_known_object_names()
     print("Objets connus par MoveIt :", known_objects)
 
-    print("============ Cube added to Gazebo and MoveIt. Press Enter to plan grasp...")
+
+    #To instance the kitchen
+    kitchen_name="kitchen"
+    scene.remove_world_object(kitchen_name)
+    # Give time for the scene to update
+    rospy.sleep(0.5)
+    scene.remove_attached_object(eef_link, name=kitchen_name) # Ensure detached if it was attached
+    rospy.sleep(0.5)
+
+    try:
+        from gazebo_msgs.srv import DeleteModel
+        delete_model_proxy = rospy.ServiceProxy('/gazebo/delete_model', DeleteModel)
+        delete_model_proxy(model_name=kitchen_name)
+    except rospy.ServiceException as e:
+        rospy.loginfo("Minor error during model deletion (model might not exist): %s " % e)
+
+
+   # 1. Dfinir la pose du cube
+    kitchen_pose = geometry_msgs.msg.Pose()
+    kitchen_pose.orientation.w = 0.0
+    kitchen_pose.position.x = 0.0  # Devant le robot
+    kitchen_pose.position.y = 0.0  # Centr
+    kitchen_pose.position.z = 0.0001  # Lgrement au-dessus du sol (ou de la table)
+
+    # 2. Charger le fichier SDF du cube
+    # Remplacez "votre_package" par le nom de votre package ROS
+    sdf_path = "/home/ubuntu_hi_paris/ws_moveit/src/franka_ros/franka_gazebo/models/checkerboard_plane/checkerboard_plane.sdf"
+    with open(sdf_path, "r") as f:
+        kitchen_sdf = f.read()
+
+    # 3. Faire apparatre le cube dans Gazebo
+    try:
+        spawn_model_proxy(
+            model_name=kitchen_name,
+            model_xml=kitchen_sdf,
+            robot_namespace="/",
+            initial_pose=kitchen_pose,
+            reference_frame="world"  # ou "panda_link0" si vous prfrez
+        )
+        print("Successfully spawned %s box_name in Gazebo." % box_name)
+    except rospy.ServiceException as e:
+        rospy.logerr("Spawn SDF service call failed: %s " % e)
+        return
+    
+    rospy.sleep(0.5)
+    print("============ Kitchen added to Gazebo. Press Enter to plan grasp...")
 
 
     
@@ -322,6 +425,8 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
 
         while t < max_steps:
             cv2.imwrite(save_path_2, latest_image_external)
+            cv2.imwrite(save_path, latest_image)
+
 
             # Wait for a new image to be published
             while image_timestamp <= last_processed_timestamp:
@@ -345,7 +450,9 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             #Obervation with no state (openvla)
             observation = {
             "state": [3],
-            "images": { "Top": encode_image(latest_image_external)},
+            "images": { 
+                "image": encode_image(latest_image_external)},
+                # "wrist_images": encode_image(latest_image)},
             "instruction": task_description
             }
             print("OBSERVATION")
@@ -388,10 +495,39 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             # Assumons que "actions[0]" contient votre liste de 7 valeurs
             action = actions[0]
 
+            action[0] = -action[0] 
+            action[1] = -action[1] 
+            action[2] = -action[2] 
+            # On stocke temporairement la valeur de dy
+            # dy_original = action[1]
+            # # On met la valeur de dz dans dy
+            # action[1] = action[2]
+            # # On met l'ancienne valeur de dy dans dz
+            # action[2] = dy_original
+
             # Les 6 premires valeurs sont pour le mouvement du bras (delta de pose)
             # La 7me valeur est pour la pince
-            arm_action = action[:6]
+
+            # arm_action = action[:6]
+            arm_action = np.array(action[:6]) 
+
             gripper_action = action[6]
+
+    
+            # print("Action BRUTE reue: dx=%.3f, dy=%.3f, dz=%.3f, d_roll=%.3f, d_pitch=%.3f, d_yaw=%.3f" %
+            #     arm_action[0], arm_action[1], arm_action[2], arm_action[3], arm_action[4], arm_action[5]
+            # )
+
+            # # 2. Applique un facteur de reduction. Commence avec une valeur faible comme 0.2
+            ACTION_SCALE_FACTOR = 1  # Ajustez cette valeur selon vos besoins aprs tests
+            arm_action *= ACTION_SCALE_FACTOR
+
+            # 3. Affiche l'action qui sera rellement applique
+            # print( "Action APPLIQUE (aprs scaling): dx=%.3f, dy=%.3f, dz=%.3f" % 
+            #     arm_action[0], arm_action[1], arm_action[2]
+            # )
+
+
             # --- Debugging Pause ---
             # Pause here to allow you to inspect the scene in RViz before planning the first move.
                 # --- 2. Commander le bras ---
@@ -408,19 +544,32 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             target_pose.position.y += arm_action[1]
             target_pose.position.z += arm_action[2]
 
+            def axis_angle_to_quat(delta_rot):
+                """Convertit un vecteur angle-axis en quaternion"""
+                angle = np.linalg.norm(delta_rot)
+                if angle < 1e-6:
+                    # Rotation trs petite, approx identite
+                    return [0, 0, 0, 1]
+                axis = delta_rot / angle
+                q = tf.transformations.quaternion_about_axis(angle, axis)
+                return q
+
+            delta_rotation_quat = axis_angle_to_quat(np.array(arm_action[3:6]))
             # Appliquer les deltas de rotation (les 3 dernieres valeurs)
             # C'est plus complexe. On convertit le delta (souvent un axe-angle) en quaternion
             # et on le multiplie avec le quaternion actuel.
-            delta_rotation_quat = tf.transformations.quaternion_from_euler(
-                arm_action[3], arm_action[4], arm_action[5]
-            )
+            # delta_rotation_quat = tf.transformations.quaternion_from_euler(
+            #     arm_action[3], arm_action[4], arm_action[5]
+            # )
             current_orientation_quat = [
                 current_pose.orientation.x,
                 current_pose.orientation.y,
                 current_pose.orientation.z,
                 current_pose.orientation.w,
             ]
-            new_orientation_quat = tf.transformations.quaternion_multiply(delta_rotation_quat, current_orientation_quat)
+            # new_orientation_quat = tf.transformations.quaternion_multiply(delta_rotation_quat, current_orientation_quat)
+            new_orientation_quat = tf.transformations.quaternion_multiply(current_orientation_quat,delta_rotation_quat)
+
 
             target_pose.orientation.x = new_orientation_quat[0]
             target_pose.orientation.y = new_orientation_quat[1]
@@ -437,12 +586,18 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             success_arm = move_group.go(wait=True)
             move_group.stop()
             move_group.clear_pose_targets()
+            t+=1
 
             if success_arm:
                 print("Arm movement successful.")
-                t+=1
+                control_gripper(move_group_gripper, gripper_action)
+                # t+=1
             else:
                 rospy.logerr("Arm movement failed!")
+
+
+            
+
         else:
             print(latest_image)
             print(latest_image_external)
