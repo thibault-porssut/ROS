@@ -17,3 +17,4 @@ logs/
 libero.egg-info/
 .vscode/
 venv_py3
+*.png

@@ -25,7 +25,7 @@ from tasks import PickAndPlaceTask #, PushTask
 
 # --- Flag Definitions (command-line arguments) ---
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('num_episodes', 10, 'The number of episodes to record.')
+flags.DEFINE_integer('num_episodes', 300, 'The number of episodes to record.')
 flags.DEFINE_string('trajectories_dir', '~/recorded_episodes/panda_pick_and_place',
                     'The directory where trajectories will be saved.')
 flags.DEFINE_string('instruction', 'pick the red cube', 'The language instruction for the task.')

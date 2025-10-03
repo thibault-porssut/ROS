@@ -26,7 +26,9 @@ image_timestamp = 0
 
 bridge = CvBridge()
 SERVER_URL = "http://localhost:8000/predict"  # URL du serveur FastAPI
-INSTRUCTION = "pick the red cube" 
+# INSTRUCTION = "pick the red cube"
+INSTRUCTION = "pick the red cube and place it on the left"
+
 
 # --- Configuration for Simulation vs. Real Robot ---
 # This variable will now be set based on command-line arguments
@@ -280,7 +282,7 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
     with open(sdf_path, "r") as f:
         cube_sdf = f.read()
     
-    cube_sdf = cube_sdf.replace('<gravity>false</gravity>', '<gravity>true</gravity>')
+    # cube_sdf = cube_sdf.replace('<gravity>false</gravity>', '<gravity>true</gravity>')
     # cube_sdf = cube_sdf.replace('<static>false</static>', '<static>true</static>')
 
     # 3. Faire apparatre le cube dans Gazebo
@@ -293,27 +295,27 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             reference_frame="world"  # ou "panda_link0" si vous prfrez
         )
  
-        # Nom du lien : habituellement 'model_name::link_name'
-        link_name = 'grasping_cube::link'
+        # # Nom du lien : habituellement 'model_name::link_name'
+        # link_name = 'grasping_cube::link'
 
-        # Service pour rcuprer les propri actuelles
-        get_link = rospy.ServiceProxy('/gazebo/get_link_properties', GetLinkProperties)
-        props = get_link(link_name)
+        # # Service pour rcuprer les propri actuelles
+        # get_link = rospy.ServiceProxy('/gazebo/get_link_properties', GetLinkProperties)
+        # props = get_link(link_name)
 
-        # Modifier la gravit
-        set_link = rospy.ServiceProxy('/gazebo/set_link_properties', SetLinkProperties)
-        set_link(
-            link_name=link_name,
-            com=props.com,
-            gravity_mode=False,      
-            mass=props.mass,
-            ixx=props.ixx,
-            iyy=props.iyy,
-            izz=props.izz,
-            ixy=props.ixy,
-            ixz=props.ixz,
-            iyz=props.iyz
-        )
+        # # Modifier la gravit
+        # set_link = rospy.ServiceProxy('/gazebo/set_link_properties', SetLinkProperties)
+        # set_link(
+        #     link_name=link_name,
+        #     com=props.com,
+        #     gravity_mode=False,      
+        #     mass=props.mass,
+        #     ixx=props.ixx,
+        #     iyy=props.iyy,
+        #     izz=props.izz,
+        #     ixy=props.ixy,
+        #     ixz=props.ixz,
+        #     iyz=props.iyz
+        # )
         print("Successfully spawned %s box_name in Gazebo." % box_name)
     except rospy.ServiceException as e:
         rospy.logerr("Spawn SDF service call failed: %s " % e)
@@ -332,7 +334,7 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
     scene.add_box(box_name, box_pose_stamped, size=box_size)
 
     # scene.allow_collisions('grasping_cube',)
-    # scene.remove_world_object(box_name)
+    scene.remove_world_object(box_name)
     rospy.sleep(1.0) # Laisser le temps  MoveIt de se mettre  jour
     known_objects = scene.get_known_object_names()
     print("Objets connus par MoveIt :", known_objects)
@@ -495,9 +497,9 @@ def pick_and_place_demo(is_simulation_mode): # Added is_simulation_mode as an ar
             # Assumons que "actions[0]" contient votre liste de 7 valeurs
             action = actions[0]
 
-            action[0] = -action[0] 
-            action[1] = -action[1] 
-            action[2] = -action[2] 
+            # action[0] = -action[0] 
+            # action[1] = -action[1] 
+            # action[2] = -action[2] 
             # On stocke temporairement la valeur de dy
             # dy_original = action[1]
             # # On met la valeur de dz dans dy

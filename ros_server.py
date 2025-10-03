@@ -84,7 +84,8 @@ def get_observation_data():
     # --- From here, the function is the same as before ---
     
     # Get state
-    current_pose = move_group.get_current_pose().pose
+    # current_pose = move_group.get_current_pose().pose
+    current_pose=move_group.get_current_pose(eef_link).pose
     pose_values = [
         current_pose.position.x, current_pose.position.y, current_pose.position.z,
         current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z, current_pose.orientation.w
@@ -233,70 +234,6 @@ def reset():
     return jsonify(get_observation_data())
 
 
-# @app.route('/reset', methods=['POST'])
-# def reset():
-#     global box_pose, box_size, is_attached
-#     rospy.loginfo("Server: Received RESET command.")
-
-#     # --- 1. GENTLE CLEANUP (replaces reset_simulation) ---
-    
-#     # Detach any object in the MoveIt! planning scene
-#     if is_attached:
-#         scene.remove_attached_object(eef_link, name="grasping_cube")
-#         is_attached = False
-
-#     # Detach any physical joint created by the link attacher plugin
-#     try:
-#         req = AttachRequest()
-#         req.model_name_1 = "panda"
-#         req.link_name_1 = "panda_link7"
-#         req.model_name_2 = "grasping_cube"
-#         req.link_name_2 = "link"
-#         detach_proxy(req)
-#         rospy.loginfo("Server: Ensured old joint is detached in Gazebo.")
-#     except rospy.ServiceException as e:
-#         rospy.logwarn("Server: Detach service call failed during reset (this is often okay): %s", e)
-
-#     # Delete the old model from Gazebo
-#     try:
-#         delete_model_proxy(model_name="grasping_cube")
-#     except rospy.ServiceException:
-#         pass # It's okay if the model doesn't exist
-    
-#     # Remove the collision object from the planning scene
-#     scene.remove_world_object("grasping_cube")
-#     rospy.sleep(0.5)
-#     # ---------------------------------------------------
-
-#     # --- 2. Reset robot pose and spawn the new cube ---
-#     move_group.set_named_target("ready")
-#     move_group.go(wait=True)
-    
-#     box_pose_stamped = geometry_msgs.msg.PoseStamped()
-#     box_pose_stamped.header.frame_id = move_group.get_planning_frame()
-#     box_pose_stamped.pose.orientation.w = 1.0
-#     box_pose_stamped.pose.position.x = 0.4
-#     box_pose_stamped.pose.position.y = 0.0
-#     box_pose_stamped.pose.position.z = 0.75
-#     box_pose = box_pose_stamped
-#     box_size = [0.05, 0.05, 0.05]
-
-#     try:
-#         package_path = rospack.get_path('panda_moveit_config') # Assumes your models are here
-#         sdf_path = os.path.join(package_path, 'models/grasping_cube/model.sdf')
-#         with open(sdf_path, "r") as f:
-#             model_sdf = f.read()
-#         spawn_model_proxy("grasping_cube", model_sdf, "/", box_pose.pose, "world")
-#     except Exception as e:
-#         rospy.logerr("Server: Failed to spawn cube: %s", e)
-
-#     scene.add_box("grasping_cube", box_pose, size=box_size)
-    
-#     rospy.sleep(1.0)
-#     rospy.loginfo("Server: Reset complete.")
-#     return jsonify(get_observation_data())
-
-
 @app.route('/step', methods=['POST'])
 def step():
     global is_attached, box_size, is_physically_grasping
@@ -316,7 +253,7 @@ def step():
 
     
      # --- 1. ARM MOTION ---
-    current_pose = move_group.get_current_pose().pose
+    current_pose = move_group.get_current_pose(eef_link).pose
     target_pose = copy.deepcopy(current_pose)
 
     target_pose.position.x += arm_action_delta_pos[0]
